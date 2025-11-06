@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ERV 3D Simulation - BPS Technology</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: #0b0f1a;
+        height: 100%;
+      }
+      #scene-container {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 40px;
+        color: rgba(255,255,255,0.9);
+        font-family: 'Prompt', sans-serif;
+      }
+      .header {
+        font-size: 28px;
+        font-weight: 600;
+      }
+      .sub {
+        font-size: 14px;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        color: rgba(255,255,255,0.6);
+      }
+      .footer {
+        text-align: center;
+        font-size: 13px;
+        color: rgba(255,255,255,0.5);
+        background: rgba(255,255,255,0.05);
+        padding: 8px 16px;
+        border-radius: 12px;
+        align-self: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="scene-container"></div>
+    <div class="overlay">
+      <div>
+        <div class="sub">ERV Air-to-Air Heat Exchanger</div>
+        <div class="header">Real‑time 3D Flow Simulation</div>
+      </div>
+      <div class="footer">Drag to look around • Auto-rotate enabled</div>
+    </div>
+
+    <script type="module">
+      import * as THREE from './libs/three.module.js';
+      import { OrbitControls } from './libs/OrbitControls.js';
+      import { EffectComposer } from './libs/EffectComposer.js';
+      import { RenderPass } from './libs/RenderPass.js';
+      import { UnrealBloomPass } from './libs/UnrealBloomPass.js';
+
+      const container = document.getElementById('scene-container');
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#0b0f1a');
+      scene.fog = new THREE.Fog('#0b0f1a', 35, 120);
+
+      const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
+      camera.position.set(0, 3.5, 22);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.1;
+      container.appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.autoRotate = true;
+      controls.autoRotateSpeed = 0.4;
+      controls.minDistance = 12;
+      controls.maxDistance = 40;
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+      const key = new THREE.DirectionalLight(0xffffff, 1.2);
+      key.position.set(7, 8, 12);
+      scene.add(key);
+
+      const flows = new THREE.Group();
+      scene.add(flows);
+
+      const makeCurve = (dir = 1) => {
+        const pts = [
+          new THREE.Vector3(-18 * dir, 2.2, -6),
+          new THREE.Vector3(-10 * dir, 4.0, 2),
+          new THREE.Vector3(-3 * dir, 1.2, 0),
+          new THREE.Vector3(0, 0.2, 0),
+          new THREE.Vector3(3 * dir, -1.2, 0),
+          new THREE.Vector3(10 * dir, -2.5, 2),
+          new THREE.Vector3(18 * dir, -2.0, 6)
+        ];
+        return new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.2);
+      };
+
+      const warmCurve = makeCurve(-1);
+      const coolCurve = makeCurve(1);
+
+      const core = new THREE.Group();
+      const coreBox = new THREE.Mesh(
+        new THREE.BoxGeometry(3.6, 3.6, 3.6),
+        new THREE.MeshStandardMaterial({ color: 0x11131c, metalness: 0.7, roughness: 0.4 })
+      );
+      core.add(coreBox);
+
+      const fins = new THREE.Mesh(
+        new THREE.BoxGeometry(3.7, 0.05, 3.7, 20, 1, 20),
+        new THREE.MeshBasicMaterial({ color: 0x0b6ef6, transparent: true, opacity: 0.25 })
+      );
+      fins.rotation.x = Math.PI / 2;
+      core.add(fins);
+
+      const coreGlow = new THREE.Mesh(
+        new THREE.BoxGeometry(3.9, 3.9, 3.9),
+        new THREE.MeshBasicMaterial({ color: 0xff3ab5, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending })
+      );
+      core.add(coreGlow);
+      core.position.set(0, 0.2, 0);
+      scene.add(core);
+
+      const tubeVertex = `
+        varying vec2 vUv;
+        varying float vDist;
+        void main(){
+          vUv = uv;
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          vDist = -mvPosition.z;
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `;
+
+      const tubeFragment = `
+        precision highp float;
+        uniform float uTime;
+        uniform vec3 uColorA;
+        uniform vec3 uColorB;
+        uniform float uGlow;
+        varying vec2 vUv;
+        varying float vDist;
+        float stripe(float x, float speed){
+          return smoothstep(0.0, 0.02, fract(x - speed)) - smoothstep(0.02, 0.04, fract(x - speed));
+        }
+        void main(){
+          vec3 base = mix(uColorA, uColorB, vUv.x);
+          float s1 = stripe(vUv.x, uTime * 0.18);
+          float s2 = stripe(vUv.x, uTime * 0.25 + 0.35);
+          float flow = s1 + s2;
+          float edge = pow(1.0 - abs(vUv.y - 0.5) * 2.0, 3.0);
+          float depthFade = clamp(vDist * 0.02, 0.0, 1.0);
+          vec3 color = base + (flow * 1.5 + edge * uGlow) * base;
+          gl_FragColor = vec4(color, 0.78 * depthFade);
+        }
+      `;
+
+      const makeTube = (curve, colorA, colorB) => {
+        const geometry = new THREE.TubeGeometry(curve, 400, 0.55, 16, false);
+        const material = new THREE.ShaderMaterial({
+          uniforms: {
+            uTime: { value: 0 },
+            uColorA: { value: new THREE.Color(colorA) },
+            uColorB: { value: new THREE.Color(colorB) },
+            uGlow: { value: 1.6 }
+          },
+          transparent: true,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          vertexShader: tubeVertex,
+          fragmentShader: tubeFragment
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        return { mesh, material };
+      };
+
+      const warm = makeTube(warmCurve, '#ff6235', '#ff3ab5');
+      const cool = makeTube(coolCurve, '#56b0ff', '#a36bff');
+      flows.add(warm.mesh, cool.mesh);
+
+      const makeFlowParticles = (curve, color, count = 800) => {
+        const geometry = new THREE.BufferGeometry();
+        const ts = new Float32Array(count);
+        const speeds = new Float32Array(count);
+        const offsets = new Float32Array(count);
+        for (let i = 0; i < count; i++) {
+          ts[i] = Math.random();
+          speeds[i] = 0.05 + Math.random() * 0.15;
+          offsets[i] = (Math.random() - 0.5) * 0.6;
+        }
+        geometry.setAttribute('t', new THREE.BufferAttribute(ts, 1));
+        geometry.setAttribute('speed', new THREE.BufferAttribute(speeds, 1));
+        geometry.setAttribute('off', new THREE.BufferAttribute(offsets, 1));
+        geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+        const material = new THREE.PointsMaterial({ size: 0.08, color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending });
+        const points = new THREE.Points(geometry, material);
+        points.userData.curve = curve;
+        return points;
+      };
+
+      const warmDots = makeFlowParticles(warmCurve, new THREE.Color('#ff835b'));
+      const coolDots = makeFlowParticles(coolCurve, new THREE.Color('#79c3ff'));
+      flows.add(warmDots, coolDots);
+
+      const composer = new EffectComposer(renderer);
+      composer.addPass(new RenderPass(scene, camera));
+      const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.9, 0.6, 0.2);
+      composer.addPass(bloom);
+
+      const grid = new THREE.GridHelper(120, 40, 0x16304b, 0x0d1b2a);
+      grid.rotation.x = Math.PI / 2;
+      grid.position.y = -7;
+      scene.add(grid);
+
+      const clock = new THREE.Clock();
+
+      function updateParticles(points, delta) {
+        const curve = points.userData.curve;
+        const pos = points.geometry.attributes.position;
+        const tAttr = points.geometry.getAttribute('t');
+        const speedAttr = points.geometry.getAttribute('speed');
+        const offAttr = points.geometry.getAttribute('off');
+        for (let i = 0; i < tAttr.count; i++) {
+          let t = tAttr.getX(i);
+          t += speedAttr.getX(i) * delta * 0.15;
+          if (t > 1) t -= 1;
+          tAttr.setX(i, t);
+          const p = curve.getPointAt(t);
+          const n = curve.getTangentAt(Math.max(0.0, t - 0.001)).clone().cross(new THREE.Vector3(0, 1, 0)).normalize();
+          const o = offAttr.getX(i);
+          pos.setXYZ(i, p.x + n.x * o, p.y + Math.sin(t * 20.0 + i) * 0.1, p.z + n.z * o);
+        }
+        pos.needsUpdate = true;
+        tAttr.needsUpdate = true;
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+        const delta = clock.getDelta();
+        const elapsed = clock.elapsedTime;
+        warm.material.uniforms.uTime.value = elapsed;
+        cool.material.uniforms.uTime.value = elapsed;
+        updateParticles(warmDots, delta);
+        updateParticles(coolDots, delta);
+        controls.update();
+        composer.render();
+      }
+      animate();
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        composer.setSize(window.innerWidth, window.innerHeight);
+      });
+    </script>
+  </body>
+</html>
