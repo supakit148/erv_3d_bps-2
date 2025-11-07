@@ -97,6 +97,18 @@
       border-radius: 12px;
       backdrop-filter: blur(6px);
     }
+
+  .btn#btnFull {
+  background: #0f1624;
+  border: 1px solid #2a3c5d;
+  color: #d6ebff;
+  transition: all 0.25s ease;
+  }
+  .btn#btnFull:hover {
+    background: #1a243a;
+    border-color: #3d5a89;
+  }
+
   </style>
 </head>
 <body>
@@ -133,12 +145,12 @@
     </div>
   </div>
 
-  <!-- Toggle Mode -->
+  <!-- 🔧 เพิ่มปุ่ม Full Screen ต่อจาก 3D Follow -->
   <div class="topbar">
     <button id="modeFixed" class="btn active">Fixed UI</button>
     <button id="mode3D" class="btn">3D Follow</button>
+    <button id="btnFull" class="btn">Full Screen</button>
   </div>
-  <div class="label-legend">กดปุ่มสลับโหมดแสดงผลพารามิเตอร์ (คงที่ 4 มุม / ป้ายลอยใน 3D)</div>
 
   <script type="module">
     import * as THREE from './libs/three.module.js';
@@ -428,6 +440,20 @@
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
       labelRenderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+
+  <script>
+    // ===== Full Screen Toggle =====
+    const btnFull = document.getElementById('btnFull');
+    btnFull.addEventListener('click', () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen();
+        btnFull.textContent = 'Exit Full Screen';
+      } else {
+        document.exitFullscreen();
+        btnFull.textContent = 'Full Screen';
+      }
     });
   </script>
 </body>
